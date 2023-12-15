@@ -2,6 +2,7 @@
 B3ゼミナールB MeshGraphNets実装
 
 ## 構成
+```
 src/
  |
  -- main.py
@@ -9,6 +10,7 @@ src/
  -- medium/
     |
     -- *.py
+```
 
 ## gitのコマンド諸々
 ### 新規ブランチの作成
