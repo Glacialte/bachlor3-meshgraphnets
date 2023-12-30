@@ -858,16 +858,27 @@ def visualize(loader, best_model, file_dir, args, gif_name, stats_list,
     [mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y] = stats_list
     (mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y)=(mean_vec_x.to(device),
             std_vec_x.to(device),mean_vec_edge.to(device),std_vec_edge.to(device),mean_vec_y.to(device),std_vec_y.to(device))
-
+    
+    
+    flag = True #add yamada
+    prev_pred_x = None
+    
     for data, viz_data, gs_data, eval_data in zip(loader, viz_data_loader,
                                                   gs_data_loader, eval_data_loader):
         data=data.to(args.device) 
         viz_data = data.to(args.device)
         with torch.no_grad():
-            pred, _, _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            pred, _,  _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             # pred gives the learnt accelaration between two timsteps
             # next_vel = curr_vel + pred * delta_t  
-            viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
+            
+            # edit yamada
+            if flag: # 初回のみ実行
+                viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
+            else: # 二回目以降は前の予測を使って実行
+                viz_data.x[:, 0:2] = prev_pred_x[:] + pred[:]* delta_t
+            prev_pred_x = viz_data.x[:, 0:2]
+            
             gs_data.x[:, 0:2] = data.x[:, 0:2] + data.y* delta_t
             # gs_data - viz_data = error_data
             eval_data.x[:, 0:2] = (viz_data.x[:, 0:2] - gs_data.x[:, 0:2])
