@@ -463,7 +463,7 @@ def train(dataset, device, stats_list, args):
             #data needs to be preserved in order to correctly calculate the loss
             batch=batch.to(device)
             opt.zero_grad()         #zero gradients each time
-            pred = model(batch,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            pred, _, _, _ = model(batch,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge) #edit yamada
             loss = model.loss(pred,batch,mean_vec_y,std_vec_y)
             loss.backward()         #backpropagate loss
             opt.step()
@@ -537,14 +537,39 @@ def test(loader,device,test_model,
     loss=0
     velo_rmse = 0
     num_loops=0
+    
+    prev_output = None #add yamada
 
     for data in loader:
         data=data.to(device)
         with torch.no_grad():
 
             #calculate the loss for the model given the test set
-            pred = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            if prev_output is None:
+              pred, pred_x, pred_edge_index, pred_edge_attr = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            else:
+              pred, pred_x, pred_index, pred_edge = test_model(prev_output, mean_vec_x, std_vec_x, mean_vec_edge, std_vec_edge) #add yamada
+
             loss += test_model.loss(pred, data,mean_vec_y,std_vec_y)
+            
+            data_dict = { #add yamada
+                'x': pred_x,
+                'edge_index': pred_edge_index, 
+                'edge_attr': pred_edge_attr,
+                'y': pred,
+                'p': torch.randn(1923, 1),
+                'cells': torch.randn(3612, 3),
+                'mesh_pos': torch.randn(1923, 2)
+            } #add yamada
+            prev_output = Data(
+                x=data_dict['x'],
+                edge_index=data_dict['edge_index'],
+                edge_attr=data_dict['edge_attr'],
+                y=data_dict['y'],
+                p=data_dict['p'],
+                cells=data_dict['cells'],
+                mesh_pos=data_dict['mesh_pos']
+            )
 
             #calculate validation error if asked to
             if (is_validation):
@@ -839,7 +864,7 @@ def visualize(loader, best_model, file_dir, args, gif_name, stats_list,
         data=data.to(args.device) 
         viz_data = data.to(args.device)
         with torch.no_grad():
-            pred = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            pred, _, _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             # pred gives the learnt accelaration between two timsteps
             # next_vel = curr_vel + pred * delta_t  
             viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
