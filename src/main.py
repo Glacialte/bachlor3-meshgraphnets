@@ -548,7 +548,7 @@ def test(loader,device,test_model,
             if prev_output is None:
               pred, pred_x, pred_edge_index, pred_edge_attr = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             else:
-              pred, pred_x, pred_index, pred_edge = test_model(prev_output, mean_vec_x, std_vec_x, mean_vec_edge, std_vec_edge) #add yamada
+               pred, pred_x, pred_edge_index, pred_edge_attr = test_model(prev_output, mean_vec_x, std_vec_x, mean_vec_edge, std_vec_edge) #add yamada
 
             loss += test_model.loss(pred, data,mean_vec_y,std_vec_y)
             
