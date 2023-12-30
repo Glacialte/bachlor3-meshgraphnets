@@ -20,10 +20,16 @@ import functools
 import json
 import enum
 
-root_dir = os.getcwd()
-dataset_dir = os.path.join(root_dir, '../../datasets')
-checkpoint_dir = os.path.join(root_dir, 'best_models')
-postprocess_dir = os.path.join(root_dir, 'animations')
+is_use_processed_data = True
+
+root_dir = '/root'
+dataset_dir = os.path.join(root_dir, 'datasets')
+checkpoint_dir = os.path.join(root_dir, 'bachlor3-meshgraphnets/best_models')
+postprocess_dir = os.path.join(root_dir, 'bachlor3-meshgraphnets/animations')
+# root_dir = os.getcwd()
+# dataset_dir = os.path.join(root_dir, '../../datasets')
+# checkpoint_dir = os.path.join(root_dir, 'best_models')
+# postprocess_dir = os.path.join(root_dir, 'animations')
 
 #Utility functions, provided in the release of the code from the original MeshGraphNets study:
 #https://github.com/deepmind/deepmind-research/tree/master/meshgraphnets
@@ -84,72 +90,73 @@ dt=0.01   #A constant: do not change!
 number_trajectories = 2
 number_ts = 2
 
-with h5py.File(datafile, 'r') as data:
+if not is_use_processed_data: ## not use preprocessed data
+    with h5py.File(datafile, 'r') as data:
 
-    for i,trajectory in enumerate(data.keys()):
-        if(i==number_trajectories):
-            break
-        print("Trajectory: ",i)
-
-        #We iterate over all the time steps to produce an example graph except
-        #for the last one, which does not have a following time step to produce
-        #node output values
-        for ts in range(len(data[trajectory]['velocity'])-1):
-
-            if(ts==number_ts):
+        for i,trajectory in enumerate(data.keys()):
+            if(i==number_trajectories):
                 break
+            print("Trajectory: ",i)
 
-            #Get node features
+            #We iterate over all the time steps to produce an example graph except
+            #for the last one, which does not have a following time step to produce
+            #node output values
+            for ts in range(len(data[trajectory]['velocity'])-1):
 
-            #Note that it's faster to convert to numpy then to torch than to
-            #import to torch from h5 format directly
-            momentum = torch.tensor(np.array(data[trajectory]['velocity'][ts]))
-            #node_type = torch.tensor(np.array(data[trajectory]['node_type'][ts]))
-            node_type = torch.tensor(np.array(tf.one_hot(tf.convert_to_tensor(data[trajectory]['node_type'][0]), NodeType.SIZE))).squeeze(1)
-            x = torch.cat((momentum,node_type),dim=-1).type(torch.float)
+                if(ts==number_ts):
+                    break
 
-            #Get edge indices in COO format
-            edges = triangles_to_edges(tf.convert_to_tensor(np.array(data[trajectory]['cells'][ts])))
+                #Get node features
 
-            edge_index = torch.cat( (torch.tensor(edges[0].numpy()).unsqueeze(0) ,
-                         torch.tensor(edges[1].numpy()).unsqueeze(0)), dim=0).type(torch.long)
+                #Note that it's faster to convert to numpy then to torch than to
+                #import to torch from h5 format directly
+                momentum = torch.tensor(np.array(data[trajectory]['velocity'][ts]))
+                #node_type = torch.tensor(np.array(data[trajectory]['node_type'][ts]))
+                node_type = torch.tensor(np.array(tf.one_hot(tf.convert_to_tensor(data[trajectory]['node_type'][0]), NodeType.SIZE))).squeeze(1)
+                x = torch.cat((momentum,node_type),dim=-1).type(torch.float)
 
-            #Get edge features
-            u_i=torch.tensor(np.array(data[trajectory]['mesh_pos'][ts]))[edge_index[0]]
-            u_j=torch.tensor(np.array(data[trajectory]['mesh_pos'][ts]))[edge_index[1]]
-            u_ij=u_i-u_j
-            u_ij_norm = torch.norm(u_ij,p=2,dim=1,keepdim=True)
-            edge_attr = torch.cat((u_ij,u_ij_norm),dim=-1).type(torch.float)
+                #Get edge indices in COO format
+                edges = triangles_to_edges(tf.convert_to_tensor(np.array(data[trajectory]['cells'][ts])))
 
-            #Node outputs, for training (velocity)
-            v_t=torch.tensor(np.array(data[trajectory]['velocity'][ts]))
-            v_tp1=torch.tensor(np.array(data[trajectory]['velocity'][ts+1]))
-            y=((v_tp1-v_t)/dt).type(torch.float)
+                edge_index = torch.cat( (torch.tensor(edges[0].numpy()).unsqueeze(0) ,
+                            torch.tensor(edges[1].numpy()).unsqueeze(0)), dim=0).type(torch.long)
 
-            #Node outputs, for testing integrator (pressure)
-            p=torch.tensor(np.array(data[trajectory]['pressure'][ts]))
+                #Get edge features
+                u_i=torch.tensor(np.array(data[trajectory]['mesh_pos'][ts]))[edge_index[0]]
+                u_j=torch.tensor(np.array(data[trajectory]['mesh_pos'][ts]))[edge_index[1]]
+                u_ij=u_i-u_j
+                u_ij_norm = torch.norm(u_ij,p=2,dim=1,keepdim=True)
+                edge_attr = torch.cat((u_ij,u_ij_norm),dim=-1).type(torch.float)
 
-            #Data needed for visualization code
-            cells=torch.tensor(np.array(data[trajectory]['cells'][ts]))
-            mesh_pos=torch.tensor(np.array(data[trajectory]['mesh_pos'][ts]))
+                #Node outputs, for training (velocity)
+                v_t=torch.tensor(np.array(data[trajectory]['velocity'][ts]))
+                v_tp1=torch.tensor(np.array(data[trajectory]['velocity'][ts+1]))
+                y=((v_tp1-v_t)/dt).type(torch.float)
 
-            data_list.append(Data(x=x, edge_index=edge_index, edge_attr=edge_attr,y=y,p=p,
-                                  cells=cells,mesh_pos=mesh_pos))
+                #Node outputs, for testing integrator (pressure)
+                p=torch.tensor(np.array(data[trajectory]['pressure'][ts]))
 
+                #Data needed for visualization code
+                cells=torch.tensor(np.array(data[trajectory]['cells'][ts]))
+                mesh_pos=torch.tensor(np.array(data[trajectory]['mesh_pos'][ts]))
 
+                data_list.append(Data(x=x, edge_index=edge_index, edge_attr=edge_attr,y=y,p=p,
+                                    cells=cells,mesh_pos=mesh_pos))
 
-print("Done collecting data!")
+    print("Done collecting data!")
 
-#os.path.join(data_folder + '/test.h5')
-torch.save(data_list,os.path.join(data_folder + '/test_processed_set.pt'))
-#torch.save(data_list,'./'+dataset_dir+'/test_processed_set.pt')
+    #os.path.join(data_folder + '/test.h5')
+    torch.save(data_list,os.path.join(data_folder + '/test_processed_set.pt')) ## (謎のdata_folder)
+    #torch.save(data_list,'./'+dataset_dir+'/test_processed_set.pt')
 
-print("Done saving data!")
-print("Output Location: ", dataset_dir+'/test_processed_set.pt')
+    print("Done saving data!")
+    print("Output Location: ", dataset_dir+'/test_processed_set.pt')
 
-file_path=os.path.join(dataset_dir, 'meshgraphnets_miniset5traj_vis.pt')
-dataset_full_timesteps = torch.load(file_path)
-dataset = torch.load(file_path)[:1]
+else: ## use preprocessed data
+    file_path=os.path.join(dataset_dir, '/test_processed_set.pt')
+    # file_path=os.path.join(dataset_dir, 'meshgraphnets_miniset5traj_vis.pt')
+    dataset_full_timesteps = torch.load(file_path)
+    dataset = torch.load(file_path)[:1]
 
 def normalize(to_normalize,mean_vec,std_vec):
     return (to_normalize-mean_vec)/std_vec
@@ -291,7 +298,7 @@ class MeshGraphNet(torch.nn.Module):
 
         # step 3: decode latent node embeddings into physical quantities of interest
 
-        return self.decoder(x)
+        return self.decoder(x), x, edge_index, edge_attr
 
     def loss(self, pred, inputs,mean_vec_y,std_vec_y):
         #Define the node types that we calculate loss for
