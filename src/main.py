@@ -20,7 +20,7 @@ import functools
 import json
 import enum
 
-is_use_processed_data = True
+is_use_processed_data = False
 
 root_dir = '/root'
 dataset_dir = os.path.join(root_dir, 'datasets')
@@ -76,8 +76,10 @@ class NodeType(enum.IntEnum):
     SIZE = 9
 
 #Define the data folder and data file name
-datafile = os.path.join(dataset_dir + '/test.h5')
+datafile = os.path.join(dataset_dir, 'test.h5')
+print("path datafile : " + datafile)
 data = h5py.File(datafile, 'r')
+file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
 
 #Define the list that will return the data graphs
 data_list = []
@@ -146,15 +148,15 @@ if not is_use_processed_data: ## not use preprocessed data
     print("Done collecting data!")
 
     #os.path.join(data_folder + '/test.h5')
-    torch.save(data_list,os.path.join(data_folder + '/test_processed_set.pt')) ## (謎のdata_folder)
+    # 前処理したデータをdataset_dirに保存する処理？
+    torch.save(data_list, os.path.join(dataset_dir, 'test_processed_set.pt')) ## (謎のdata_folder)
     #torch.save(data_list,'./'+dataset_dir+'/test_processed_set.pt')
 
     print("Done saving data!")
     print("Output Location: ", dataset_dir+'/test_processed_set.pt')
 
 else: ## use preprocessed data
-    file_path=os.path.join(dataset_dir, '/test_processed_set.pt')
-    # file_path=os.path.join(dataset_dir, 'meshgraphnets_miniset5traj_vis.pt')
+    file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
     dataset_full_timesteps = torch.load(file_path)
     dataset = torch.load(file_path)[:1]
 
@@ -440,7 +442,7 @@ def train(dataset, device, stats_list, args):
     #torch_geometric DataLoaders are used for handling the data of lists of graphs
     loader = DataLoader(dataset[:args.train_size], batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(dataset[args.train_size:], batch_size=args.batch_size, shuffle=False)
-
+    
     #The statistics of the data are decomposed
     [mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y] = stats_list
     (mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y)=(mean_vec_x.to(device),
@@ -613,8 +615,8 @@ for args in [
          'opt_restart': 0, 
          'weight_decay': 5e-4, 
          'lr': 0.001,
-         'train_size': 45, 
-         'test_size': 10, 
+         'train_size': 3, 
+         'test_size': 1, 
          'device':'cuda',
          'shuffle': True, 
          'save_velo_val': True,
@@ -718,8 +720,6 @@ if (args.save_velo_val):
     
     
 save_plots(args, losses, test_losses, velo_val_losses)
-
-file_path=os.path.join(dataset_dir, 'meshgraphnets_miniset30traj5ts_vis.pt')
 
 for args in [
         {'model_type': 'meshgraphnet',  
