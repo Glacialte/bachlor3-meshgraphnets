@@ -867,17 +867,22 @@ def visualize(loader, best_model, file_dir, args, gif_name, stats_list,
                                                   gs_data_loader, eval_data_loader):
         data=data.to(args.device) 
         viz_data = data.to(args.device)
+        
+        for data in best_model_rollout_data:
+            viz_data.x = data.x
+        
         with torch.no_grad():
-            pred, _,  _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            # pred, _,  _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             # pred gives the learnt accelaration between two timsteps
             # next_vel = curr_vel + pred * delta_t  
             
             # edit yamada
-            if flag: # 初回のみ実行
-                viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
-            else: # 二回目以降は前の予測を使って実行
-                viz_data.x[:, 0:2] = prev_pred_x[:] + pred[:]* delta_t
-            prev_pred_x = viz_data.x[:, 0:2]
+            # if flag: # 初回のみ実行
+            #     viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
+            # else: # 二回目以降は前の予測を使って実行
+            #     viz_data.x[:, 0:2] = prev_pred_x[:] + pred[:]* delta_t
+            # prev_pred_x = viz_data.x[:, 0:2]
+           
             
             gs_data.x[:, 0:2] = data.x[:, 0:2] + data.y* delta_t
             # gs_data - viz_data = error_data
@@ -906,4 +911,5 @@ args.postprocess_dir = postprocess_dir
 
 eval_data_loader = visualize(dataset, model, args.postprocess_dir, args, animation_name, stats_list, 
            delta_t = 0.01, skip = 1)
+
 
