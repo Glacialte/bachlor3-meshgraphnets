@@ -20,16 +20,12 @@ import functools
 import json
 import enum
 
-is_use_processed_data = False
+is_use_processed_data = True
 
 root_dir = '/root'
 dataset_dir = os.path.join(root_dir, 'datasets')
 checkpoint_dir = os.path.join(root_dir, 'bachlor3-meshgraphnets/best_models')
 postprocess_dir = os.path.join(root_dir, 'bachlor3-meshgraphnets/animations')
-# root_dir = os.getcwd()
-# dataset_dir = os.path.join(root_dir, '../../datasets')
-# checkpoint_dir = os.path.join(root_dir, 'best_models')
-# postprocess_dir = os.path.join(root_dir, 'animations')
 
 #Utility functions, provided in the release of the code from the original MeshGraphNets study:
 #https://github.com/deepmind/deepmind-research/tree/master/meshgraphnets
@@ -76,7 +72,7 @@ class NodeType(enum.IntEnum):
     SIZE = 9
 
 #Define the data folder and data file name
-datafile = os.path.join(dataset_dir, 'test.h5')
+datafile = os.path.join(dataset_dir, 'train.h5')
 print("path datafile : " + datafile)
 data = h5py.File(datafile, 'r')
 file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
@@ -87,27 +83,16 @@ data_list = []
 #define the time difference between the graphs
 dt=0.01   #A constant: do not change!
 
-#define the number of trajectories and time steps within each to process.
-#note that here we only include 2 of each for a toy example.
-number_trajectories = 2
-number_ts = 2
-
 if not is_use_processed_data: ## not use preprocessed data
     with h5py.File(datafile, 'r') as data:
 
         for i,trajectory in enumerate(data.keys()):
-            # if(i==number_trajectories):
-            #     break
             print("Trajectory: ",i)
 
             #We iterate over all the time steps to produce an example graph except
             #for the last one, which does not have a following time step to produce
             #node output values
             for ts in range(len(data[trajectory]['velocity'])-1):
-
-                if(ts==number_ts):
-                    break
-
                 #Get node features
 
                 #Note that it's faster to convert to numpy then to torch than to
@@ -146,19 +131,17 @@ if not is_use_processed_data: ## not use preprocessed data
                                     cells=cells,mesh_pos=mesh_pos))
 
     print("Done collecting data!")
-
-    #os.path.join(data_folder + '/test.h5')
-    # 前処理したデータをdataset_dirに保存する処理？
     torch.save(data_list, os.path.join(dataset_dir, 'test_processed_set.pt')) ## (謎のdata_folder)
-    #torch.save(data_list,'./'+dataset_dir+'/test_processed_set.pt')
 
     print("Done saving data!")
     print("Output Location: ", dataset_dir+'/test_processed_set.pt')
 
 else: ## use preprocessed data
+    print('~~~~~ load test_processed_set.pt ~~~~~')
     file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
     dataset_full_timesteps = torch.load(file_path)
     dataset = torch.load(file_path)[:1]
+    print('~~~~~ done loading data ~~~~~')
 
 def normalize(to_normalize,mean_vec,std_vec):
     return (to_normalize-mean_vec)/std_vec
@@ -426,16 +409,11 @@ def build_optimizer(args, params):
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.opt_restart)
     return scheduler, optimizer
 
-
-best_model_rollout_data = [] # add yamada
-
 def train(dataset, device, stats_list, args):
     '''
     Performs a training loop on the dataset for MeshGraphNets. Also calls
     test and validation functions.
     '''
-    
-    model_rollout_data = []
 
     df = pd.DataFrame(columns=['epoch','train_loss','test_loss', 'velo_val_loss'])
 
@@ -490,11 +468,11 @@ def train(dataset, device, stats_list, args):
         if epoch % 10 == 0:
             if (args.save_velo_val):
                 # save velocity evaluation
-                test_loss, velo_val_rmse, model_rollout_data = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
-                                 std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val) # edit yamada
+                test_loss, velo_val_rmse = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
+                                 std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val)
                 velo_val_losses.append(velo_val_rmse.item())
             else:
-                test_loss, _, model_rollout_data = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
+                test_loss, _ = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
                                  std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val)
 
             test_losses.append(test_loss.item())
@@ -510,7 +488,6 @@ def train(dataset, device, stats_list, args):
             if test_loss < best_test_loss:
                 best_test_loss = test_loss
                 best_model = copy.deepcopy(model)
-                best_model_rollout_data = model_rollout_data
 
         else:
             #If not the tenth epoch, append the previously calculated loss to the
@@ -520,11 +497,11 @@ def train(dataset, device, stats_list, args):
               velo_val_losses.append(velo_val_losses[-1])
 
         if (args.save_velo_val):
-            df = df.append({'epoch': epoch,'train_loss': losses[-1],
+            pd.concat([df, {'epoch': epoch,'train_loss': losses[-1],
                             'test_loss':test_losses[-1],
-                           'velo_val_loss': velo_val_losses[-1]}, ignore_index=True)
+                           'velo_val_loss': velo_val_losses[-1]}]) # 元々ignore_index=True
         else:
-            df = df.append({'epoch': epoch, 'train_loss': losses[-1], 'test_loss': test_losses[-1]}, ignore_index=True)
+            pd.concat([df, {'epoch': epoch, 'train_loss': losses[-1], 'test_loss': test_losses[-1]}])  # 元々ignore_index=True
         if(epoch%100==0):
             if (args.save_velo_val):
                 print("train loss", str(round(total_loss, 2)),
@@ -541,7 +518,6 @@ def train(dataset, device, stats_list, args):
 
     return test_losses, losses, velo_val_losses, best_model, best_test_loss, test_loader
 
-
 def test(loader,device,test_model,
          mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y, is_validation,
           delta_t=0.01, save_model_preds=False, model_type=None):
@@ -555,7 +531,6 @@ def test(loader,device,test_model,
     num_loops=0
     
     prev_output = None #add yamada
-    model_rollout_data = [] # add yamada
 
     for data in loader:
         data=data.to(device)
@@ -563,7 +538,7 @@ def test(loader,device,test_model,
 
             #calculate the loss for the model given the test set
             if prev_output is None:
-               pred, pred_x, pred_edge_index, pred_edge_attr = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+              pred, pred_x, pred_edge_index, pred_edge_attr = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             else:
                pred, pred_x, pred_edge_index, pred_edge_attr = test_model(prev_output, mean_vec_x, std_vec_x, mean_vec_edge, std_vec_edge) #add yamada
 
@@ -587,8 +562,6 @@ def test(loader,device,test_model,
                 cells=data_dict['cells'],
                 mesh_pos=data_dict['mesh_pos']
             )
-            
-            model_rollout_data.append(prev_output) # add yamada
 
             #calculate validation error if asked to
             if (is_validation):
@@ -608,7 +581,7 @@ def test(loader,device,test_model,
 
         num_loops+=1
         # if velocity is evaluated, return velo_rmse as 0
-    return loss/num_loops, velo_rmse/num_loops, model_rollout_data
+    return loss/num_loops, velo_rmse/num_loops
 
 class objectview(object):
     def __init__(self, d):
@@ -625,8 +598,8 @@ for args in [
          'opt_restart': 0, 
          'weight_decay': 5e-4, 
          'lr': 0.001,
-         'train_size': 3, 
-         'test_size': 1, 
+         'train_size': 45, 
+         'test_size': 10, 
          'device':'cuda',
          'shuffle': True, 
          'save_velo_val': True,
@@ -653,8 +626,9 @@ stats_list = get_stats(dataset)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 args.device = device
 print(device)
-
+print('~~~~~ start train ~~~~~')
 test_losses, losses, velo_val_losses, best_model, best_test_loss, test_loader = train(dataset, device, stats_list, args)
+print('~~~~~ done training ~~~~~')
 
 print("Min test set loss: {0}".format(min(test_losses)))
 print("Minimum loss: {0}".format(min(losses)))
@@ -884,22 +858,17 @@ def visualize(loader, best_model, file_dir, args, gif_name, stats_list,
                                                   gs_data_loader, eval_data_loader):
         data=data.to(args.device) 
         viz_data = data.to(args.device)
-        
-        for data in best_model_rollout_data:
-            viz_data.x = data.x
-        
         with torch.no_grad():
-            # pred, _,  _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            pred, _,  _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             # pred gives the learnt accelaration between two timsteps
             # next_vel = curr_vel + pred * delta_t  
             
             # edit yamada
-            # if flag: # 初回のみ実行
-            #     viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
-            # else: # 二回目以降は前の予測を使って実行
-            #     viz_data.x[:, 0:2] = prev_pred_x[:] + pred[:]* delta_t
-            # prev_pred_x = viz_data.x[:, 0:2]
-           
+            if flag: # 初回のみ実行
+                viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
+            else: # 二回目以降は前の予測を使って実行
+                viz_data.x[:, 0:2] = prev_pred_x[:] + pred[:]* delta_t
+            prev_pred_x = viz_data.x[:, 0:2]
             
             gs_data.x[:, 0:2] = data.x[:, 0:2] + data.y* delta_t
             # gs_data - viz_data = error_data
