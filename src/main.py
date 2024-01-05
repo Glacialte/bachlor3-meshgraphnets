@@ -96,8 +96,8 @@ if not is_use_processed_data: ## not use preprocessed data
     with h5py.File(datafile, 'r') as data:
 
         for i,trajectory in enumerate(data.keys()):
-            if(i==number_trajectories):
-                break
+            # if(i==number_trajectories):
+            #     break
             print("Trajectory: ",i)
 
             #We iterate over all the time steps to produce an example graph except
@@ -426,11 +426,16 @@ def build_optimizer(args, params):
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.opt_restart)
     return scheduler, optimizer
 
+
+best_model_rollout_data = [] # add yamada
+
 def train(dataset, device, stats_list, args):
     '''
     Performs a training loop on the dataset for MeshGraphNets. Also calls
     test and validation functions.
     '''
+    
+    model_rollout_data = []
 
     df = pd.DataFrame(columns=['epoch','train_loss','test_loss', 'velo_val_loss'])
 
@@ -485,11 +490,11 @@ def train(dataset, device, stats_list, args):
         if epoch % 10 == 0:
             if (args.save_velo_val):
                 # save velocity evaluation
-                test_loss, velo_val_rmse = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
-                                 std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val)
+                test_loss, velo_val_rmse, model_rollout_data = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
+                                 std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val) # edit yamada
                 velo_val_losses.append(velo_val_rmse.item())
             else:
-                test_loss, _ = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
+                test_loss, _, model_rollout_data = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
                                  std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val)
 
             test_losses.append(test_loss.item())
@@ -505,6 +510,7 @@ def train(dataset, device, stats_list, args):
             if test_loss < best_test_loss:
                 best_test_loss = test_loss
                 best_model = copy.deepcopy(model)
+                best_model_rollout_data = model_rollout_data
 
         else:
             #If not the tenth epoch, append the previously calculated loss to the
@@ -535,6 +541,7 @@ def train(dataset, device, stats_list, args):
 
     return test_losses, losses, velo_val_losses, best_model, best_test_loss, test_loader
 
+
 def test(loader,device,test_model,
          mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y, is_validation,
           delta_t=0.01, save_model_preds=False, model_type=None):
@@ -548,6 +555,7 @@ def test(loader,device,test_model,
     num_loops=0
     
     prev_output = None #add yamada
+    model_rollout_data = [] # add yamada
 
     for data in loader:
         data=data.to(device)
@@ -555,7 +563,7 @@ def test(loader,device,test_model,
 
             #calculate the loss for the model given the test set
             if prev_output is None:
-              pred, pred_x, pred_edge_index, pred_edge_attr = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+               pred, pred_x, pred_edge_index, pred_edge_attr = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             else:
                pred, pred_x, pred_edge_index, pred_edge_attr = test_model(prev_output, mean_vec_x, std_vec_x, mean_vec_edge, std_vec_edge) #add yamada
 
@@ -579,6 +587,8 @@ def test(loader,device,test_model,
                 cells=data_dict['cells'],
                 mesh_pos=data_dict['mesh_pos']
             )
+            
+            model_rollout_data.append(prev_output) # add yamada
 
             #calculate validation error if asked to
             if (is_validation):
@@ -598,7 +608,7 @@ def test(loader,device,test_model,
 
         num_loops+=1
         # if velocity is evaluated, return velo_rmse as 0
-    return loss/num_loops, velo_rmse/num_loops
+    return loss/num_loops, velo_rmse/num_loops, model_rollout_data
 
 class objectview(object):
     def __init__(self, d):
@@ -874,17 +884,22 @@ def visualize(loader, best_model, file_dir, args, gif_name, stats_list,
                                                   gs_data_loader, eval_data_loader):
         data=data.to(args.device) 
         viz_data = data.to(args.device)
+        
+        for data in best_model_rollout_data:
+            viz_data.x = data.x
+        
         with torch.no_grad():
-            pred, _,  _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+            # pred, _,  _, _ = best_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
             # pred gives the learnt accelaration between two timsteps
             # next_vel = curr_vel + pred * delta_t  
             
             # edit yamada
-            if flag: # 初回のみ実行
-                viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
-            else: # 二回目以降は前の予測を使って実行
-                viz_data.x[:, 0:2] = prev_pred_x[:] + pred[:]* delta_t
-            prev_pred_x = viz_data.x[:, 0:2]
+            # if flag: # 初回のみ実行
+            #     viz_data.x[:, 0:2] = data.x[:, 0:2] + pred[:]* delta_t
+            # else: # 二回目以降は前の予測を使って実行
+            #     viz_data.x[:, 0:2] = prev_pred_x[:] + pred[:]* delta_t
+            # prev_pred_x = viz_data.x[:, 0:2]
+           
             
             gs_data.x[:, 0:2] = data.x[:, 0:2] + data.y* delta_t
             # gs_data - viz_data = error_data
