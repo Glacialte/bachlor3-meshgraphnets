@@ -20,7 +20,8 @@ import functools
 import json
 import enum
 
-is_use_processed_data = False
+is_use_processed_data = False # False -> h5ファイルを読み込んでprocessから
+use_append_to_df = False # False -> connatを使用
 
 root_dir = '/root'
 dataset_dir = os.path.join(root_dir, 'datasets')
@@ -89,8 +90,8 @@ dt=0.01   #A constant: do not change!
 
 #define the number of trajectories and time steps within each to process.
 #note that here we only include 2 of each for a toy example.
-number_trajectories = 2
-number_ts = 2
+# number_trajectories = 2
+# number_ts = 2
 
 if not is_use_processed_data: ## not use preprocessed data
     with h5py.File(datafile, 'r') as data:
@@ -104,9 +105,8 @@ if not is_use_processed_data: ## not use preprocessed data
             #for the last one, which does not have a following time step to produce
             #node output values
             for ts in range(len(data[trajectory]['velocity'])-1):
-
-                if(ts==number_ts):
-                    break
+                # if(ts==number_ts):
+                #     break
 
                 #Get node features
 
@@ -520,11 +520,25 @@ def train(dataset, device, stats_list, args):
               velo_val_losses.append(velo_val_losses[-1])
 
         if (args.save_velo_val):
-            df = df.append({'epoch': epoch,'train_loss': losses[-1],
+            if(use_append_to_df):
+                df = df.append({'epoch': epoch,'train_loss': losses[-1],
                             'test_loss':test_losses[-1],
                            'velo_val_loss': velo_val_losses[-1]}, ignore_index=True)
+            else: # add yamada
+                new_row = pd.DataFrame({'epoch': [epoch],
+                        'train_loss': [losses[-1]],
+                        'test_loss': [test_losses[-1]],
+                        'velo_val_loss': [velo_val_losses[-1]]})
+                df = pd.concat([df, new_row], ignore_index=True)
         else:
-            df = df.append({'epoch': epoch, 'train_loss': losses[-1], 'test_loss': test_losses[-1]}, ignore_index=True)
+            if(use_append_to_df):
+                df = df.append({'epoch': epoch, 'train_loss': losses[-1], 'test_loss': test_losses[-1]}, ignore_index=True)
+            else: # add yamada
+                new_row = pd.DataFrame({'epoch': [epoch],
+                        'train_loss': [losses[-1]],
+                        'test_loss': [test_losses[-1]]})
+                df = pd.concat([df, new_row], ignore_index=True)
+                
         if(epoch%100==0):
             if (args.save_velo_val):
                 print("train loss", str(round(total_loss, 2)),
@@ -854,9 +868,15 @@ def make_animation(gs, pred, evl, path, name , skip = 2, save_anim = True, plot_
     
     if (save_anim):
         gs_anim = animation.FuncAnimation(fig, animate, frames=num_frames, interval=1000)
-        writergif = animation.PillowWriter(fps=10) 
-        anim_path = os.path.join(path, '{}_anim.gif'.format(name))
-        gs_anim.save( anim_path, writer=writergif)
+      #change from
+        # writergif = animation.PillowWriter(fps=10) 
+        # anim_path = os.path.join(path, '{}_anim.gif'.format(name))
+        # gs_anim.save( anim_path, writer=writergif)
+        
+      #change to
+        anim_path = os.path.join(path, '{}_anim.mp4'.format(name))
+        gs_anim.save( anim_path, writer='ffmeg', fps=10)
+        
         plt.show(block=True)
     else:
         pass
@@ -877,8 +897,8 @@ def visualize(loader, best_model, file_dir, args, gif_name, stats_list,
             std_vec_x.to(device),mean_vec_edge.to(device),std_vec_edge.to(device),mean_vec_y.to(device),std_vec_y.to(device))
     
     
-    flag = True #add yamada
-    prev_pred_x = None
+    # flag = True #add yamada
+    # prev_pred_x = None
     
     for data, viz_data, gs_data, eval_data in zip(loader, viz_data_loader,
                                                   gs_data_loader, eval_data_loader):
