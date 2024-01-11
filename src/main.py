@@ -1,3 +1,6 @@
+# ライブラリの読み込みなど(実行は一回でOK)
+
+# for train test
 import torch
 import random
 import numpy as np
@@ -20,17 +23,34 @@ import functools
 import json
 import enum
 
+# for make animation to mp4
+from matplotlib import tri as mtri
+from matplotlib import animation
+import matplotlib.pyplot as plt
+import numpy as np
+import os 
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+## グローバル変数
+#純変数
+dt=0.01   #A constant: do not change!
+# 空リストなど
+data_list = []  #読み込んだデータをすべて一つずつ並べて入れる．学習時に使用
+new_data_lists = [] # new_data_listはtime step(一つのシミュレーション)であり，それを順に入れているリストのリスト
+best_model_rollout_data = [] # best modelの各ステップのデータを格納するvisualize時に呼び出す
+# フラグ設定
 is_use_processed_data = False # False -> h5ファイルを読み込んでprocessから
 use_append_to_df = False # False -> connatを使用
-
+#pathの設定など1
 root_dir = '/root'
 dataset_dir = os.path.join(root_dir, 'datasets')
 checkpoint_dir = os.path.join(root_dir, 'bachlor3-meshgraphnets/best_models')
 postprocess_dir = os.path.join(root_dir, 'bachlor3-meshgraphnets/animations')
-# root_dir = os.getcwd()
-# dataset_dir = os.path.join(root_dir, '../../datasets')
-# checkpoint_dir = os.path.join(root_dir, 'best_models')
-# postprocess_dir = os.path.join(root_dir, 'animations')
+#pathの設定など2
+datafile = os.path.join(dataset_dir, 'test.h5')
+print("path datafile : " + datafile)
+data = h5py.File(datafile, 'r')
+file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
 
 #Utility functions, provided in the release of the code from the original MeshGraphNets study:
 #https://github.com/deepmind/deepmind-research/tree/master/meshgraphnets
@@ -58,8 +78,6 @@ def triangles_to_edges(faces):
   return (tf.concat([senders, receivers], axis=0),
           tf.concat([receivers, senders], axis=0))
 
-
-
 class NodeType(enum.IntEnum):
     """
     Define the code for the one-hot vector representing the node types.
@@ -75,23 +93,6 @@ class NodeType(enum.IntEnum):
     OUTFLOW = 5
     WALL_BOUNDARY = 6
     SIZE = 9
-
-#Define the data folder and data file name
-datafile = os.path.join(dataset_dir, 'test.h5')
-print("path datafile : " + datafile)
-data = h5py.File(datafile, 'r')
-file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
-
-#Define the list that will return the data graphs
-data_list = []
-
-#define the time difference between the graphs
-dt=0.01   #A constant: do not change!
-
-#define the number of trajectories and time steps within each to process.
-#note that here we only include 2 of each for a toy example.
-# number_trajectories = 2
-# number_ts = 2
 
 if not is_use_processed_data: ## not use preprocessed data
     with h5py.File(datafile, 'r') as data:
@@ -155,10 +156,9 @@ if not is_use_processed_data: ## not use preprocessed data
     print("Done saving data!")
     print("Output Location: ", dataset_dir+'/test_processed_set.pt')
 
-else: ## use preprocessed data
-    file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
-    dataset_full_timesteps = torch.load(file_path)
-    dataset = torch.load(file_path)[:1]
+file_path=os.path.join(dataset_dir, 'test_processed_set.pt')
+dataset_full_timesteps = torch.load(file_path)
+dataset = torch.load(file_path)[:1]
 
 def normalize(to_normalize,mean_vec,std_vec):
     return (to_normalize-mean_vec)/std_vec
@@ -273,8 +273,7 @@ class MeshGraphNet(torch.nn.Module):
                               ReLU(),
                               Linear( hidden_dim, output_dim)
                               )
-
-
+        
     def build_processor_model(self):
         return ProcessorLayer
 
@@ -300,7 +299,7 @@ class MeshGraphNet(torch.nn.Module):
 
         # step 3: decode latent node embeddings into physical quantities of interest
 
-        return self.decoder(x), x, edge_index, edge_attr
+        return self.decoder(x)
 
     def loss(self, pred, inputs,mean_vec_y,std_vec_y):
         #Define the node types that we calculate loss for
@@ -343,7 +342,6 @@ class ProcessorLayer(MessagePassing):
                                    ReLU(),
                                    Linear( out_channels, out_channels),
                                    LayerNorm(out_channels))
-
 
         self.reset_parameters()
 
@@ -426,16 +424,13 @@ def build_optimizer(args, params):
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.opt_restart)
     return scheduler, optimizer
 
-
-best_model_rollout_data = [] # add yamada
-
 def train(dataset, device, stats_list, args):
     '''
     Performs a training loop on the dataset for MeshGraphNets. Also calls
     test and validation functions.
     '''
     
-    model_rollout_data = []
+    model_rollout_data = [] # 各シミュレーションステップの0~max_tsまでの予測後のデータを格納
 
     df = pd.DataFrame(columns=['epoch','train_loss','test_loss', 'velo_val_loss'])
 
@@ -443,10 +438,19 @@ def train(dataset, device, stats_list, args):
     model_name='model_nl'+str(args.num_layers)+'_bs'+str(args.batch_size) + \
                '_hd'+str(args.hidden_dim)+'_ep'+str(args.epochs)+'_wd'+str(args.weight_decay) + \
                '_lr'+str(args.lr)+'_shuff_'+str(args.shuffle)+'_tr'+str(args.train_size)+'_te'+str(args.test_size)
-
-    #torch_geometric DataLoaders are used for handling the data of lists of graphs
-    loader = DataLoader(dataset[:args.train_size], batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(dataset[args.train_size:], batch_size=args.batch_size, shuffle=False)
+               
+    ## データローダー　※かなり変更してる
+    # トレーニングに用いるシミュレーションリストのリスト shape = (train_traj, max_ts)
+    train_data_lists = new_data_lists[:args.train_traj] 
+    # トレーニングに用いるデータを順に並べてリストに入れたもの(シミュレーションごとの区切りが無くなる) shape = (train_traj * max_ts)
+    train_data_set = [] 
+    for train_data_list in train_data_lists:
+        for train_data in train_data_list:
+            train_data_set.append(train_data)
+    train_loader = DataLoader(train_data_set, batch_size=args.batch_size, shuffle=False)
+    
+    # テスト用のデータはシミュレーションリストのリストの状態で渡す shape = (test_traj, max_ts)
+    test_data_lists = new_data_lists[args.train_traj:] 
     
     #The statistics of the data are decomposed
     [mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y] = stats_list
@@ -458,8 +462,7 @@ def train(dataset, device, stats_list, args):
     num_edge_features = dataset[0].edge_attr.shape[1]
     num_classes = 2 # the dynamic variables have the shape of 2 (velocity)
 
-    model = MeshGraphNet(num_node_features, num_edge_features, args.hidden_dim, num_classes,
-                            args).to(device)
+    model = MeshGraphNet(num_node_features, num_edge_features, args.hidden_dim, num_classes, args).to(device)
     scheduler, opt = build_optimizer(args, model.parameters())
 
     # train
@@ -472,12 +475,12 @@ def train(dataset, device, stats_list, args):
         total_loss = 0
         model.train()
         num_loops=0
-        for batch in loader:
+        for batch in train_loader:
             #Note that normalization must be done before it's called. The unnormalized
             #data needs to be preserved in order to correctly calculate the loss
             batch=batch.to(device)
             opt.zero_grad()         #zero gradients each time
-            pred, _, _, _ = model(batch,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge) #edit yamada
+            pred = model(batch,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge) #edit yamada
             loss = model.loss(pred,batch,mean_vec_y,std_vec_y)
             loss.backward()         #backpropagate loss
             opt.step()
@@ -490,11 +493,11 @@ def train(dataset, device, stats_list, args):
         if epoch % 10 == 0:
             if (args.save_velo_val):
                 # save velocity evaluation
-                test_loss, velo_val_rmse, model_rollout_data = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
+                test_loss, velo_val_rmse, model_rollout_data = test(test_data_lists ,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
                                  std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val) # edit yamada
                 velo_val_losses.append(velo_val_rmse.item())
             else:
-                test_loss, _, model_rollout_data = test(test_loader,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
+                test_loss, _, model_rollout_data = test(test_data_lists ,device,model,mean_vec_x,std_vec_x,mean_vec_edge,
                                  std_vec_edge,mean_vec_y,std_vec_y, args.save_velo_val)
 
             test_losses.append(test_loss.item())
@@ -547,7 +550,6 @@ def train(dataset, device, stats_list, args):
             else:
                 print("train loss", str(round(total_loss,2)), "test loss", str(round(test_loss.item(),2)))
 
-
             if(args.save_best_model):
 
                 PATH = os.path.join(args.checkpoint_dir, model_name+'.pt')
@@ -556,7 +558,7 @@ def train(dataset, device, stats_list, args):
     return test_losses, losses, velo_val_losses, best_model, best_test_loss, test_loader
 
 
-def test(loader,device,test_model,
+def test(test_data_lists ,device,test_model,
          mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge,mean_vec_y,std_vec_y, is_validation,
           delta_t=0.01, save_model_preds=False, model_type=None):
   
@@ -568,112 +570,76 @@ def test(loader,device,test_model,
     velo_rmse = 0
     num_loops=0
     
-    prev_output = None #add yamada
+    prev_step = None #add yamada
     model_rollout_data = [] # add yamada
 
-    for data in loader:
-        data=data.to(device)
-        with torch.no_grad():
-
-            #calculate the loss for the model given the test set
-            if prev_output is None:
-               pred, pred_x, pred_edge_index, pred_edge_attr = test_model(data,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
-            else:
-               pred, pred_x, pred_edge_index, pred_edge_attr = test_model(prev_output, mean_vec_x, std_vec_x, mean_vec_edge, std_vec_edge) #add yamada
-
-            loss += test_model.loss(pred, data,mean_vec_y,std_vec_y)
+    for one_simration in test_data_lists:
+        for index, one_step in enumerate(one_simration):
             
-            data_dict = { #add yamada
-                'x': pred_x,
-                'edge_index': pred_edge_index, 
-                'edge_attr': pred_edge_attr,
-                'y': pred,
-                'p': torch.randn(1923, 1),
-                'cells': torch.randn(3612, 3),
-                'mesh_pos': torch.randn(1923, 2)
-            } #add yamada
-            prev_output = Data(
-                x=data_dict['x'],
-                edge_index=data_dict['edge_index'],
-                edge_attr=data_dict['edge_attr'],
-                y=data_dict['y'],
-                p=data_dict['p'],
-                cells=data_dict['cells'],
-                mesh_pos=data_dict['mesh_pos']
-            )
-            
-            model_rollout_data.append(prev_output) # add yamada
-
-            #calculate validation error if asked to
-            if (is_validation):
-
-                #Like for the MeshGraphNets model, calculate the mask over which we calculate
-                #flow loss and add this calculated RMSE value to our val error
-                normal = torch.tensor(0)
-                outflow = torch.tensor(5)
-                loss_mask = torch.logical_or((torch.argmax(data.x[:, 2:], dim=1) == torch.tensor(0)),
-                                             (torch.argmax(data.x[:, 2:], dim=1) == torch.tensor(5)))
-
-                eval_velo = data.x[:, 0:2] + unnormalize( pred[:], mean_vec_y, std_vec_y ) * delta_t
-                gs_velo = data.x[:, 0:2] + data.y[:] * delta_t
+            one_step = one_step.to(device)
+            with torch.no_grad():
+                if index == 0:
+                    pred = test_model(one_step,mean_vec_x,std_vec_x,mean_vec_edge,std_vec_edge)
+                else:
+                    pred = test_model(prev_step, mean_vec_x, std_vec_x, mean_vec_edge, std_vec_edge)
                 
-                error = torch.sum((eval_velo - gs_velo) ** 2, axis=1)
-                velo_rmse += torch.sqrt(torch.mean(error[loss_mask]))
+                loss += test_model.loss(pred, data,mean_vec_y,std_vec_y)
+                
+                pad_length = one_step.x.dim()  # 埋める後の列数
+                new_pred = torch.zeros((pred.size(0), pad_length), device= device)  # 全てゼロの新しいテンソルを作成
+                # new_pred = torch.zeros((pred.size(0), pad_length), dtype=torch.int, device= device)  # 全てゼロの新しいテンソルを作成
+                new_pred[:, :pred.size(1)] = pred  # 元のテンソルをコピー
+                
+                displace_x = new_pred * delta_t
+                if index == 0:
+                    next_x = one_step.x + displace_x
+                else:
+                    next_x = prev_step.x + displace_x
 
-        num_loops+=1
-        # if velocity is evaluated, return velo_rmse as 0
+                data_dict = { #add yamada
+                    'x': next_x,
+                    'edge_index': one_step.edge_index, 
+                    'edge_attr': one_step.edge_attr,
+                    'y': pred,
+                    'p': one_step.p,
+                    'cells': one_step.cells,
+                    'mesh_pos': one_step.mesh_pos
+                    } #add yamada
+                prev_step = Data(
+                    x=data_dict['x'],
+                    edge_index=data_dict['edge_index'],
+                    edge_attr=data_dict['edge_attr'],
+                    y=data_dict['y'],
+                    p=data_dict['p'],
+                    cells=data_dict['cells'],
+                    mesh_pos=data_dict['mesh_pos']
+                )
+            
+                model_rollout_data.append(prev_step) # add yamada
+
+                #calculate validation error if asked to
+                if (is_validation):
+                    #Like for the MeshGraphNets model, calculate the mask over which we calculate
+                    #flow loss and add this calculated RMSE value to our val error
+                    normal = torch.tensor(0)
+                    outflow = torch.tensor(5)
+                    loss_mask = torch.logical_or((torch.argmax(data.x[:, 2:], dim=1) == torch.tensor(0)),
+                                                (torch.argmax(data.x[:, 2:], dim=1) == torch.tensor(5)))
+
+                    eval_velo = data.x[:, 0:2] + unnormalize( pred[:], mean_vec_y, std_vec_y ) * delta_t
+                    gs_velo = data.x[:, 0:2] + data.y[:] * delta_t
+                    
+                    error = torch.sum((eval_velo - gs_velo) ** 2, axis=1)
+                    velo_rmse += torch.sqrt(torch.mean(error[loss_mask]))
+
+                num_loops+=1 # lossを計算した回数
+                
+    # if velocity is evaluated, return velo_rmse as 0
     return loss/num_loops, velo_rmse/num_loops, model_rollout_data
 
 class objectview(object):
     def __init__(self, d):
         self.__dict__ = d
-
-for args in [
-        {'model_type': 'meshgraphnet',  
-         'num_layers': 10,
-         'batch_size': 16, 
-         'hidden_dim': 10, 
-         'epochs': 5000,
-         'opt': 'adam', 
-         'opt_scheduler': 'none', 
-         'opt_restart': 0, 
-         'weight_decay': 5e-4, 
-         'lr': 0.001,
-         'train_size': 3, 
-         'test_size': 1, 
-         'device':'cuda',
-         'shuffle': True, 
-         'save_velo_val': True,
-         'save_best_model': True, 
-         'checkpoint_dir': './best_models/',
-         'postprocess_dir': './2d_loss_plots/'},
-    ]:
-        args = objectview(args)
-
-#To ensure reproducibility the best we can, here we control the sources of
-#randomness by seeding the various random number generators used in this Colab
-#For more information, see: https://pytorch.org/docs/stable/notes/randomness.html
-torch.manual_seed(5)  #Torch
-random.seed(5)        #Python
-np.random.seed(5)     #NumPy
-
-dataset = torch.load(file_path)[:(args.train_size+args.test_size)]
-
-if(args.shuffle):
-  random.shuffle(dataset)
-
-stats_list = get_stats(dataset)
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-args.device = device
-print(device)
-
-test_losses, losses, velo_val_losses, best_model, best_test_loss, test_loader = train(dataset, device, stats_list, args)
-
-print("Min test set loss: {0}".format(min(test_losses)))
-print("Minimum loss: {0}".format(min(losses)))
-if (args.save_velo_val):
-    print("Minimum velocity validation loss: {0}".format(min(velo_val_losses)))
 
 def save_plots(args, losses, test_losses, velo_val_losses):
     model_name='model_nl'+str(args.num_layers)+'_bs'+str(args.batch_size) + \
@@ -697,6 +663,69 @@ def save_plots(args, losses, test_losses, velo_val_losses):
     plt.legend()
     plt.show()
     f.savefig(PATH, bbox_inches='tight')
+    
+# これ以降で実行
+for args in [
+        {'model_type': 'meshgraphnet',  
+         'num_layers': 10,
+         'batch_size': 16, 
+         'hidden_dim': 10, 
+         'epochs': 5000,
+         'opt': 'adam', 
+         'opt_scheduler': 'none', 
+         'opt_restart': 0, 
+         'weight_decay': 5e-4, 
+         'lr': 0.001,
+        #  'train_size': 3, 
+        #  'test_size': 1, 
+         'train_traj': 35, 
+         'test_traj': 15, 
+         'device':'cuda',
+         'shuffle': True, 
+         'save_velo_val': True,
+         'save_best_model': True, 
+         'checkpoint_dir': './best_models/',
+         'postprocess_dir': './2d_loss_plots/'},
+    ]:
+        args = objectview(args)
+
+#To ensure reproducibility the best we can, here we control the sources of
+#randomness by seeding the various random number generators used in this Colab
+#For more information, see: https://pytorch.org/docs/stable/notes/randomness.html
+torch.manual_seed(5)  #Torch
+random.seed(5)        #Python
+np.random.seed(5)     #NumPy
+
+# dataset = torch.load(file_path)[:(args.train_size+args.test_size)]
+if args.train_traj + args.test_traj > len(new_data_lists)*len(new_data_lists[0]):
+    print("(args.train_traj + args.test_traj) is too big.")
+    exit()
+
+acutual_train_data_lists = new_data_lists[0:args.train_traj]
+actual_train_dataset = []
+for acutual_train_data_list in acutual_train_data_lists:
+    for acutual_train_data in acutual_train_data_lists:
+        actual_train_dataset.append(acutual_train_data)
+        
+acutual_test_data_set = new_data_lists[args.train_traj:(args.train_traj + args.test_traj)]
+
+if(args.shuffle):
+  random.shuffle(actual_train_dataset)
+
+train_stats_list = get_stats(actual_train_dataset)
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+args.device = device
+print('device is {}'.format(device))
+
+test_losses, losses, velo_val_losses, best_model, best_test_loss, test_loader = train(dataset, device, train_stats_list, args)
+
+print("Min test set loss: {0}".format(min(test_losses)))
+print("Minimum loss: {0}".format(min(losses)))
+if (args.save_velo_val):
+    print("Minimum velocity validation loss: {0}".format(min(velo_val_losses)))
+
+
     
 save_plots(args, losses, test_losses, velo_val_losses)
 
